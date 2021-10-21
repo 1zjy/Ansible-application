@@ -1,0 +1,225 @@
+---
+- hosts: all
+  gather_facts: no
+  vars:
+    ansible_connection: winrm
+    ansible_winrm_transport: ntlm
+    ansible_winrm_server_cert_validation: ignore
+    wsusip: "{{wsusip}}"
+    wsusport: "{{wsusport}}"
+    win_searchpatcheslogpath: "{{ win_searchpatcheslogpath }}"
+    win_updatepatcheslogpath: "{{ win_updatepatcheslogpath }}"
+  tasks:
+    - name: "(1).检测Winrm组件状态开始"
+      win_shell: "echo '检测Winrm组件状态结束：正常'"
+      register: winrmstate
+      until: winrmstate.rc == 0
+      retries: 3
+      delay: 5
+      
+
+    - name: "(2).执行检测wsus url地址:http://{{wsusip}}:{{wsusport}}/ClientWebService/Client.asmx 是否可达开始"
+      win_shell: "Invoke-WebRequest  -Uri http://{{wsusip}}:{{wsusport}}/ClientWebService/Client.asmx | Select-Object  -Property StatusCode,StatusDescription|select-string 'OK'"
+      register: http_output
+      until: '"200" in  http_output.stdout'
+      retries: 3
+      delay: 5
+      
+    - block:    
+      - name: "(2).重启[Windows Update]和[Background Intelligent Transfer Service]服务并设置策略操作开始"
+        win_service:
+          name: "{{ item }}"
+          state: restarted
+          start_mode: auto
+        with_items:
+          - wuauserv
+          - BITS
+      rescue:
+        - name: "(2).获取服务重启情况开始"
+          debug: msg="两个服务重启存在异常错误可以忽略！！"
+
+
+    - name: "(3).立即发送wsus服务器检测和报告命令..."
+      win_shell: "{{ item }}"
+      with_items:
+        - "wuauclt.exe /resetauthorization /detectnow"
+        - "wuauclt.exe /reportnow"
+      ignore_errors: true
+      
+    - block:
+      - name: "温馨提示："
+        debug: msg="因环境、系统或网络等因素，搜索补丁时间可能比较长；当出现搜索无补丁或异常，会执行尝试搜索最多3次，请耐心等待..."
+        
+      - name: "(4).尝试搜索补丁开始..."
+        win_updates:
+          state: searched
+          log_path: "{{win_searchpatcheslogpath}}"
+          category_names:
+            - Application
+            - Connectors
+            - CriticalUpdates
+            - DefinitionUpdates
+            - DeveloperKits
+            - FeaturePacks
+            - Guidance
+            - SecurityUpdates
+            - ServicePacks
+            - Tools
+            - UpdateRollups
+            - Updates
+        register: searchinfo
+        until: "'found_update_count' in searchinfo and searchinfo.found_update_count > 0"
+        retries: 2
+        delay: 1
+      rescue:
+        - name: "搜索补丁时校验是否存在异常错误"
+          fail: 
+            msg: "报错日志：{{ searchinfo.msg }},请排查服务器是否异常"
+          when: "'found_update_count' not in  searchinfo"
+          
+        - name: "获取搜索补丁异常的结果"
+          debug: msg="温馨提示：尝试搜索补丁已达到3次，未搜索到任何补丁，跳过后续的安装补丁的步骤。"
+   
+          
+
+    - name: "(5).获取搜索到的补丁信息开始"
+      win_shell: "'第{{ searchinfo.attempts }}次搜索到{{ searchinfo.found_update_count }}个需要更新的补丁，详细补丁为：\n'+$((Get-Content {{win_searchpatcheslogpath}} | Select-Object -Last $($((Get-Content {{win_searchpatcheslogpath}}).Count) - $((Select-String {{win_searchpatcheslogpath}}  -pattern 'WUA is available in current logon process, running natively' | Select-Object LineNumber)[-1]|Select-Object -ExpandProperty LineNumber)+1)|select-string 'title'|Out-String) -replace '\"title\":  \"', ' - \"'  -replace '\\s{2,}', '\n')"
+      register: pacheslist
+      when: searchinfo.found_update_count > 0
+    
+    - block:  
+      - name: "(6).更新补丁前检查是否需要重启操作系统"
+        fail: 
+          msg: "对不起，安装补丁前要求重启操作系统(可能因为上次更新补丁没有执行服务器操作！！)"
+        when: searchinfo.reboot_required
+      rescue:
+        - name: "更新补丁前检查是否需要重启操作系统"
+          debug: msg="温馨提示：对不起需要安装以上补丁，需要执行重启操作系统，跳过后续安装补丁的步骤。"
+      when: searchinfo.found_update_count > 0 
+      
+    - block:  
+      - name: "(7).执行安装补丁操作开始"
+        win_updates:
+          state: installed
+          log_path: "{{win_updatepatcheslogpath}}"
+          category_names:
+            - Application
+            - Connectors
+            - CriticalUpdates
+            - DefinitionUpdates
+            - DeveloperKits
+            - FeaturePacks
+            - Guidance
+            - SecurityUpdates
+            - ServicePacks
+            - Tools
+            - UpdateRollups
+            - Updates
+        register: installinfo
+        
+      - name: "(8).校验是否存在更新失败补丁开始"
+        fail: 
+          msg: "总共{{installinfo.found_update_count}}个补丁,失败更新个数为{{installinfo.failed_update_count}}个,请重试更新补丁"
+        when: installinfo.failed_update_count > 0
+
+      - name: "(9).获取安装补丁结果信息开始"
+        debug: msg="补丁总数为{{ installinfo.found_update_count }}个；已安装补丁{{installinfo.installed_update_count}}个；失败安装补丁{{installinfo.failed_update_count}}个；是否要求重启为{{installinfo.reboot_required}}."
+    
+      - name: "(10).操作系统30秒后执行重启操作开始"
+        win_reboot: 
+          msg: "当前系统30秒后开始执行重启操作"
+          post_reboot_delay: 10  
+          pre_reboot_delay: 30
+          test_command: whoami
+        register: reboot_info
+        when: installinfo.reboot_required       
+    
+      - name: "(11).当前检查补丁安装结果"
+        debug: msg="当前已有{{installinfo.installed_update_count}}补丁安装成功"
+        when: installinfo.failed_update_count == 0
+      when: searchinfo.reboot_required == false and  searchinfo.found_update_count > 0 
+   
+      
+      - block:
+        - name: "操作系统重启之后，温馨提示："
+          debug: msg="因环境、系统或网络等因素，搜索补丁时间可能比较长；当出现搜索无补丁或异常，会执行尝试搜索最多3次，请耐心等待..."
+          
+        - name: "(12).操作系统重启之后，继续尝试搜索补丁开始..."
+          win_updates:
+            state: searched
+            log_path: "{{win_searchpatcheslogpath}}"
+            category_names:
+              - Application
+              - Connectors
+              - CriticalUpdates
+              - DefinitionUpdates
+              - DeveloperKits
+              - FeaturePacks
+              - Guidance
+              - SecurityUpdates
+              - ServicePacks
+              - Tools
+              - UpdateRollups
+              - Updates
+          register: searchinfo1
+          until: "'found_update_count' in searchinfo1 and searchinfo1.found_update_count > 0"
+          retries: 2
+          delay: 1
+        rescue:
+          - name: "操作系统重启之后，搜索补丁时校验是否存在异常错误"
+            fail: 
+              msg: "报错日志：{{ searchinfo1.msg }},请排查服务器是否异常"
+            when: "'found_update_count' not in  searchinfo1"
+            
+          - name: "操作系统重启之后，获取搜索补丁异常的结果"
+            debug: msg="操作系统重启之后，温馨提示：尝试搜索补丁已达到3次，未搜索到任何补丁，跳过后续的安装补丁的步骤。"
+        when: installinfo.reboot_required
+
+      - name: "(13).操作系统重启之后，获取搜索到的补丁信息开始"
+        win_shell: "'第{{ searchinfo1.attempts }}次搜索到{{ searchinfo1.found_update_count }}个需要更新的补丁，详细补丁为：\n'+$((Get-Content {{win_searchpatcheslogpath}} | Select-Object -Last $($((Get-Content {{win_searchpatcheslogpath}}).Count) - $((Select-String {{win_searchpatcheslogpath}}  -pattern 'WUA is available in current logon process, running natively' | Select-Object LineNumber)[-1]|Select-Object -ExpandProperty LineNumber)+1)|select-string 'title'|Out-String) -replace '\"title\":  \"', ' - \"'  -replace '\\s{2,}', '\n')"
+        register: pacheslist1
+        when: installinfo.reboot_required and searchinfo1.found_update_count > 0
+      
+
+      - block:  
+        - name: "(14).操作系统重启之后,继续执行安装补丁操作开始"
+          win_updates:
+            state: installed
+            log_path: "{{win_updatepatcheslogpath}}"
+            category_names:
+              - Application
+              - Connectors
+              - CriticalUpdates
+              - DefinitionUpdates
+              - DeveloperKits
+              - FeaturePacks
+              - Guidance
+              - SecurityUpdates
+              - ServicePacks
+              - Tools
+              - UpdateRollups
+              - Updates
+          register: installinfo1
+          
+        - name: "(15).校验是否存在更新失败补丁开始"
+          fail: 
+            msg: "总共{{installinfo1.found_update_count}}个补丁,失败更新个数为{{installinfo1.failed_update_count}}个,请重试更新补丁"
+          when: installinfo1.failed_update_count > 0
+        
+        - name: "(16).获取安装补丁结果信息开始"
+          debug: msg="补丁总数为{{ installinfo1.found_update_count }}个；已安装补丁{{installinfo1.installed_update_count}}个；失败安装补丁{{installinfo1.failed_update_count}}个；是否要求重启为{{installinfo1.reboot_required}}."
+        
+        - name: "(17).操作系统30秒后执行重启操作开始"
+          win_reboot: 
+            msg: "当前系统30秒后开始执行重启操作"
+            post_reboot_delay: 10  
+            pre_reboot_delay: 30
+            test_command: whoami
+          register: reboot_info
+          when: installinfo1.reboot_required       
+        
+        - name: "(18).当前检查补丁安装结果"
+          debug: msg="当前已有{{installinfo1.installed_update_count}}补丁安装成功"
+          when: installinfo1.failed_update_count == 0
+        when: installinfo.reboot_required and searchinfo1.reboot_required == false and  searchinfo1.found_update_count > 0 
+ 
