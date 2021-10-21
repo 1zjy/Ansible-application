@@ -2,8 +2,8 @@
 
 #### 介绍
 基于ansible自身模块应用
-- 交换机自动化管理场景；
-- Windows Server补丁自动更新场景；
+- 交换机自动化管理场景(Switch)；
+- Windows Server补丁自动更新场景(WindowsUpdate)；
 
 #### 一、交换机自动化场景说明
 此脚本支持思科、华为通用型交换机设备。
