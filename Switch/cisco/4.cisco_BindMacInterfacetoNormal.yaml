@@ -1,0 +1,70 @@
+- name: "绑定MAC的接口转普口接口"
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  vars:
+     network_interface: "{{ network_interface }}"
+     ansible_network_os: "ios"
+  tasks:
+  - block:
+    - name: "(1).获取思科的设备信息"
+      ios_command:
+        commands: show version | in IOS
+      register: skversioninfo
+    
+    - name: "(2).检测当前接口{{ network_interface }}是否存在Vlan"
+      ios_command:
+        commands: show run int {{ network_interface }} | in vlan
+      register: skvlaninfo
+      
+    - name: "(3).执行前清理接口配置"
+      ios_command:
+        commands: |
+              enable
+              config t
+              default interface {{ network_interface }}
+                          
+    - name: "(4).原始配置vlan存在则执行添加VLAN,不存在直接跳过"
+      ios_command:
+        commands: |
+              enable
+              config t
+              interface {{ network_interface }}
+              switchport access vlan {{ skvlaninfo.stdout[0].split()[-1] }}
+      when: "'vlan' in skvlaninfo.stdout[0]"        
+    
+    
+    - name: "(5).在思科设备把绑定MAC{{ network_interface }}接口转普口接口"
+      ios_command:
+        commands: |
+               enable
+               config t
+               interface  {{ network_interface }}
+               description "SNAC PORT"
+               switchport mode access
+               authentication port-control auto
+               authentication periodic
+               authentication timer reauthenticate 43200
+               dot1x pae authenticator
+               dot1x timeout quiet-period 10
+               dot1x max-req 4
+               spanning-tree portfast
+               spanning-tree bpduguard enable
+               exit
+               do wr          
+      register: skcmdinfo
+
+    - name: "(6).检测思科设备绑定MAC{{ network_interface }}接口转普口接口配置状态"
+      ios_command:
+        commands: show ip int brief {{ network_interface }} | in YES
+      register: skcheckresults     
+  
+    - fail: 
+        msg: "(7).对不起,当前思科设备{{ network_interface }}绑定MAC接口转普口接口失败!!"
+      when: "'down' in skcheckresults.stdout_lines[0][0] or 'disable' in skcheckresults.stdout_lines[0][0]"
+      
+    - name: "(7).思科设备接口绑定MAC{{ network_interface }}接口转普口接口状态!!"
+      debug: msg="{{ network_interface }}绑定MAC接口转普口接口状态操作成功!!"
+    when: ansible_network_os == 'ios'
+
+

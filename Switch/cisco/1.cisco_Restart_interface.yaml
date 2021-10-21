@@ -1,0 +1,37 @@
+- name: "重启网络设备接口"
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  vars:
+     network_interface: "{{ network_interface }}"
+     ansible_network_os: "ios"
+  tasks:
+  - block:
+    - name: "(1).获取思科设备信息"
+      ios_command:
+        commands: show version | in IOS
+  
+    - name: "(2).重启思科设备{{ network_interface }}接口操作"
+      ios_command:
+        commands: |
+              enable
+              config t
+              interface {{ network_interface }}
+              no shutdown
+              exit
+      
+    - name: "(3).检测思科设备{{ network_interface }}接口状态"
+      ios_command:
+        commands: show ip int brief {{ network_interface }} | in YES
+      register: skcheckresults     
+  
+    
+    - fail: 
+        msg: "(4).对不起,当前思科设备{{ network_interface }}接口重启失败！！"
+      when: "'down' in skcheckresults.stdout_lines[0][0] or 'disable' in skcheckresults.stdout_lines[0][0]"
+      
+      
+    - name: "(4).思科设备{{ network_interface }}接口状态:"
+      debug: msg="思科设备{{ network_interface }}接口重启成功!!"
+    when: ansible_network_os == 'ios'
+

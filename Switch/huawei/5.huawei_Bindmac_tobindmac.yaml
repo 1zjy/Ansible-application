@@ -1,0 +1,67 @@
+- name: "绑定MAC的接口更改绑定的MAC"
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  vars:
+     network_interface: "{{ network_interface }}"
+     ansible_network_os: "ce"
+  tasks:
+  - block:
+    - name: "(1).获取华为的设备信息"
+      ce_command:
+        commands: display version | in Switch
+      
+    - name: "(2).检测当前接口{{ network_interface }}是否存在Vlan"
+      ce_command:
+        commands: display current-configuration interface {{ network_interface }} | in vlan
+      register: hwvlaninfo
+      
+    - name: "(3).执行前清理接口配置"
+      ce_command:
+        commands: |
+              system-view
+              clear config interface {{ network_interface }}
+              y
+                          
+    - name: "(4).原始配置vlan存在则执行添加VLAN,不存在直接跳过"
+      ce_command:
+        commands: |
+              system-view
+              interface {{ network_interface }}
+              port link-type access
+              port default vlan {{ hwvlaninfo.stdout[0].split()[-1] }}
+      when: "'vlan' in hwvlaninfo.stdout[0]"        
+        
+    - name: "(5).华为设备接口做绑定MAC的接口更改绑定的MAC操作"
+      ce_command:
+        commands: |
+              system-view
+              interface {{ network_interface }}
+              port link-type access
+              port-security enable
+              undo port-security mac-address sticky
+              shutdown
+              undo shutdown
+              port-security mac-address sticky
+              restart
+              quit
+              quit
+              save
+              y
+
+    - name: "(6).延时10s"
+      command: sleep 10
+      delegate_to: 127.0.0.1
+      
+    - name: "(7).检测华为设备{{ network_interface }}绑定MAC的接口更改绑定的MAC接口设置状态"
+      ce_command:
+        commands: display int {{ network_interface }} | in state
+      register: hwcheckresults
+ 
+    - fail: 
+        msg: "(8).对不起,当前华为设备{{ network_interface }}绑定MAC的接口更改绑定的MAC接口失败！！"
+      when: "'DOWN' in hwcheckresults.stdout[0] or 'DISABLE' in hwcheckresults.stdout[0]"
+ 
+    - name: "(8).华为设备接口绑定MAC的接口更改绑定的MAC状态:"
+      debug: msg="华为设备{{ network_interface }}绑定MAC的接口更改绑定的MAC接口成功!!"
+    when: ansible_network_os == 'ce'

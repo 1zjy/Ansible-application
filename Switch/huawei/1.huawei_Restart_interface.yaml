@@ -1,0 +1,42 @@
+- name: "重启网络设备接口"
+  hosts: all
+  connection: network_cli
+  gather_facts: no
+  vars:
+     network_interface: "{{ network_interface }}"
+     ansible_network_os: "ce"
+  tasks:
+  - block:
+    - name: "(1).获取华为设备信息"
+      ce_command:
+        commands: display version | in Switch
+  
+    - name: "(2).重启华为设备{{ network_interface }}接口操作"
+      ce_command:
+        commands: |
+             system-view
+             interface {{ network_interface }}
+             shutdown
+             undo shutdown
+             quit
+      
+    - name: "(3).延时10s"
+      command: sleep 10
+      delegate_to: 127.0.0.1
+      
+    - name: "(4).检测华为设备{{ network_interface }}接口状态"
+      ce_command:
+        commands: display int {{ network_interface }} | in state
+      register: hwcheckresults
+    
+    - fail: 
+        msg: "(5).对不起,当前华为设备{{ network_interface }}接口重启失败！！"
+      when: "'DOWN' in hwcheckresults.stdout[0] or 'DISABLE' in hwcheckresults.stdout[0]"
+ 
+    - name: "(5).华为设备{{ network_interface }}接口状态:"
+      debug: msg="华为设备{{ network_interface }}接口重启成功！！"
+    when: ansible_network_os == 'ce'
+    
+    
+    
+   
