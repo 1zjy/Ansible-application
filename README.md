@@ -14,7 +14,7 @@
 - 4、绑定MAC的接口转普口接口
 - 5、绑定MAC的接口更改绑定的MAC
 
-
+![场景5截图](https://images.gitee.com/uploads/images/2021/1021/151609_6d55a605_9861276.png "屏幕截图.png")
 ##Windows Server补丁自动更新场景说明
 
 - 1、检测winrm状态
