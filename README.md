@@ -27,6 +27,6 @@
 
 
 ![更新补丁服务器准备](https://images.gitee.com/uploads/images/2021/1021/151240_8d7ca406_9861276.png "屏幕截图.png")
-![更新补丁部分截图](https://images.gitee.com/uploads/images/2021/1021/150437_aa121d5d_9861276.png "屏幕截图.png")
+![更新补丁部分截图](https://images.gitee.com/uploads/images/2021/1021/151345_f5953f5d_9861276.png "屏幕截图.png")
 
 
